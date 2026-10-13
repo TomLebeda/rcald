@@ -20,12 +20,17 @@ CLI-only, no desktop dependencies.
   conversions go through UTC (see `recur.rs`).
 - Cross-timezone `DateTime` subtraction is not implemented by chrono; convert
   to a common tz before subtraction/comparison of diffs.
+- Feed values with a `Z` suffix stay in `Tz::UTC` (RRULEs must recur in UTC);
+  `emit` displays UTC times in the system tz.
+- Recurring series are expanded over a *time* window
+  (`[now - duration, horizon + longest lead]`, leads include fallbacks and
+  override alarms), never a fixed occurrence count.
 
 ## Build / test
 
 ```sh
 cargo build
-cargo test          # 23 tests, no network needed
+cargo test          # 30 tests, no network needed
 cargo clippy --all-targets
 ```
 
@@ -45,7 +50,8 @@ trimmed real Google exports; keep them small.
 - `schedule.rs`: fallback application, due/next-trigger computation, late flag
 - `emit.rs`: JSONL writer; on broken stdout logs and exits(1) (supervision
   restarts it)
-- `daemon.rs`: sleep-until-trigger-or-fetch loop; fetch failure keeps old data
+- `daemon.rs`: sleep-until-trigger-or-fetch loop (sleeps capped at 60s,
+  fetch schedule on wall clock: suspend-safe); fetch failure keeps old data
 
 ## Config schema
 

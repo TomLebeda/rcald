@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Offset, SecondsFormat};
 use chrono_tz::Tz;
@@ -52,7 +53,16 @@ pub fn emit(r: &Reminder) {
 /// RFC 3339 with a guaranteed numeric `+hh:mm` offset. Converting to
 /// `FixedOffset` first keeps the output format independent of how `Tz`
 /// chooses to display its offset.
+///
+/// Times kept in UTC (feed values with a `Z` suffix, see `ics::parse_datetime`)
+/// are shown in the system timezone, which is what the user reads.
 fn fmt(dt: &DateTime<Tz>) -> String {
+    static LOCAL_TZ: OnceLock<Tz> = OnceLock::new();
+    let dt = if dt.timezone() == Tz::UTC {
+        dt.with_timezone(LOCAL_TZ.get_or_init(crate::ics::local_tz))
+    } else {
+        *dt
+    };
     dt.with_timezone(&dt.offset().fix())
         .to_rfc3339_opts(SecondsFormat::Secs, true)
 }

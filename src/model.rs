@@ -25,15 +25,20 @@ impl AlarmSpec {
         }
     }
 
-    /// How far before event start this alarm may trigger (0 when not applicable).
-    /// Used to size the look-back window when expanding recurring events.
-    pub fn lead_secs(&self) -> i64 {
+    /// How far before event start this alarm may trigger (0 when not applicable),
+    /// for an event lasting `duration`. Used to size the look-ahead window when
+    /// expanding recurring events.
+    pub fn lead_secs(&self, duration: Duration) -> i64 {
         match self {
             AlarmSpec::Relative {
                 offset_secs,
                 to_end,
             } => {
-                let lead = if *to_end { 0 } else { -*offset_secs };
+                let lead = if *to_end {
+                    -*offset_secs - duration.num_seconds()
+                } else {
+                    -*offset_secs
+                };
                 lead.max(0)
             }
             AlarmSpec::Absolute(_) => 0,
@@ -75,15 +80,15 @@ impl EventSeries {
         self.end - self.start
     }
 
-    /// Longest lead time among the series' relative alarms (0 if none).
+    /// Longest lead time among the relative alarms of the series and of its
+    /// overrides (0 if none).
     pub fn max_alarm_lead(&self) -> Duration {
-        let secs = self
-            .alarms
-            .iter()
-            .map(AlarmSpec::lead_secs)
-            .max()
-            .unwrap_or(0);
-        Duration::seconds(secs)
+        let master = self.alarms.iter().map(|a| a.lead_secs(self.duration()));
+        let overrides = self.overrides.iter().flat_map(|o| {
+            let dur = o.end - o.start;
+            o.alarms.iter().map(move |a| a.lead_secs(dur))
+        });
+        Duration::seconds(master.chain(overrides).max().unwrap_or(0))
     }
 }
 

@@ -43,9 +43,9 @@ fn main() -> Result<()> {
     );
 
     if args.once {
-        return run_once(&cfg, local_tz);
+        run_once(&cfg, local_tz)
     } else {
-        return daemon::run(&cfg, local_tz);
+        daemon::run(&cfg, local_tz)
     }
 }
 
@@ -67,7 +67,7 @@ fn run_once(cfg: &config::RuntimeConfig, local_tz: chrono_tz::Tz) -> Result<()> 
         emit::emit(r);
     }
     info!("once mode: emitted {} reminder(s)", n);
-    return Ok(());
+    Ok(())
 }
 
 fn init_log(verbosity: u8) {

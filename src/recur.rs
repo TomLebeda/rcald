@@ -7,13 +7,18 @@ use crate::model::{EventSeries, Occurrence};
 /// Hard cap for the occurrence iterator hops (safety net for pathological rules).
 const MAX_ITER: usize = 100_000;
 
-/// Compute up to `take` occurrences of the series with occurrence start at or after
-/// `from`, applying RECURRENCE-ID overrides and cancellations. Non-recurring series
-/// always yield their single occurrence regardless of `from`.
-pub fn occurrences(series: &EventSeries, from: DateTime<Tz>, take: usize) -> Vec<Occurrence> {
+/// Compute the occurrences of the series whose (original) start lies in
+/// `[from, until]`, applying RECURRENCE-ID overrides and cancellations.
+/// Non-recurring series always yield their single occurrence regardless of the
+/// window.
+pub fn occurrences(
+    series: &EventSeries,
+    from: DateTime<Tz>,
+    until: DateTime<Tz>,
+) -> Vec<Occurrence> {
     let starts: Vec<DateTime<Tz>> = match &series.rrule {
         None => vec![series.start],
-        Some(_) => rrule_starts(series, from, take),
+        Some(_) => rrule_starts(series, from, until),
     };
 
     let dur = series.duration();
@@ -53,20 +58,23 @@ pub fn occurrences(series: &EventSeries, from: DateTime<Tz>, take: usize) -> Vec
             },
         };
         out.push(occ);
-        if out.len() >= take {
-            break;
-        }
     }
     out.sort_by_key(|o| o.start);
     out
 }
 
-fn rrule_starts(series: &EventSeries, from: DateTime<Tz>, take: usize) -> Vec<DateTime<Tz>> {
+fn rrule_starts(
+    series: &EventSeries,
+    from: DateTime<Tz>,
+    until: DateTime<Tz>,
+) -> Vec<DateTime<Tz>> {
     let Some(set) = build_set(series) else {
         return vec![];
     };
     let tz = series.start.timezone();
     let mut out = Vec::new();
+    // The rrule iterator always starts at DTSTART (its `after()` bound is
+    // ignored by the Iterator API), so old series are walked from the start.
     for (i, dt) in (&set).into_iter().enumerate() {
         // Hop count is tracked by hand (instead of .take(MAX_ITER)) so that
         // hitting the cap produces a warning instead of silent truncation.
@@ -75,11 +83,11 @@ fn rrule_starts(series: &EventSeries, from: DateTime<Tz>, take: usize) -> Vec<Da
             break;
         }
         let d = from_rtz(dt, tz);
+        if d > until {
+            break;
+        }
         if d >= from {
             out.push(d);
-            if out.len() >= take {
-                break;
-            }
         }
     }
     out
@@ -160,7 +168,7 @@ mod tests {
     #[test]
     fn daily_rrule_counts() {
         let s = series("FREQ=DAILY;COUNT=3");
-        let occs = occurrences(&s, s.start, 10);
+        let occs = occurrences(&s, s.start, s.start + chrono::Duration::days(30));
         assert_eq!(occs.len(), 3);
         assert_eq!(occs[0].start, s.start);
         assert_eq!(occs[2].start, s.start + chrono::Duration::days(2));
@@ -174,7 +182,7 @@ mod tests {
     fn exdate_suppresses() {
         let mut s = series("FREQ=DAILY;COUNT=3");
         s.exdates.push(s.start + chrono::Duration::days(1));
-        let occs = occurrences(&s, s.start, 10);
+        let occs = occurrences(&s, s.start, s.start + chrono::Duration::days(30));
         assert_eq!(occs.len(), 2);
         assert_eq!(occs[1].start, s.start + chrono::Duration::days(2));
     }
@@ -192,7 +200,7 @@ mod tests {
             summary: "moved".into(),
             alarms: vec![],
         });
-        let occs = occurrences(&s, s.start, 10);
+        let occs = occurrences(&s, s.start, s.start + chrono::Duration::days(30));
         assert_eq!(occs.len(), 3);
         assert_eq!(occs[1].start, new_start);
         assert_eq!(occs[1].summary, "moved");
@@ -203,9 +211,35 @@ mod tests {
         let mut s = series("FREQ=DAILY;COUNT=4");
         let rid = s.start + chrono::Duration::days(2);
         s.cancelled.push(rid);
-        let occs = occurrences(&s, s.start, 10);
+        let occs = occurrences(&s, s.start, s.start + chrono::Duration::days(30));
         assert_eq!(occs.len(), 3);
         assert!(!occs.iter().any(|o| o.start == rid));
+    }
+
+    #[test]
+    fn utc_dtstart_recurs_in_utc_across_dst() {
+        let (start, _) = crate::ics::parse_datetime("20260105T080000Z", None, P).unwrap();
+        let s = EventSeries {
+            start,
+            end: start + chrono::Duration::hours(1),
+            ..series("FREQ=WEEKLY")
+        };
+        // July is CEST in Prague: a UTC rule stays at 08:00Z (10:00 local),
+        // while expansion in local wall time would drift to 07:00Z.
+        let july = Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap();
+        let from = july.with_timezone(&Tz::UTC);
+        let occs = occurrences(&s, from, from + chrono::Duration::days(7));
+        assert_eq!(occs.len(), 1);
+        assert_eq!(occs[0].start.to_rfc3339(), "2026-07-06T08:00:00+00:00");
+    }
+
+    #[test]
+    fn window_bounds_occurrences() {
+        let s = series("FREQ=DAILY");
+        let from = s.start + chrono::Duration::days(10); // no DST change in Jan
+        let occs = occurrences(&s, from, from + chrono::Duration::days(2));
+        assert_eq!(occs.len(), 3);
+        assert_eq!(occs[0].start, from);
     }
 
     #[test]
@@ -213,7 +247,7 @@ mod tests {
         let mut s = series("FREQ=DAILY;COUNT=3");
         s.rrule = None;
         let far_future = s.start + chrono::Duration::days(3650);
-        let occs = occurrences(&s, far_future, 1);
+        let occs = occurrences(&s, far_future, far_future);
         assert_eq!(occs.len(), 1);
         assert_eq!(occs[0].start, s.start);
     }

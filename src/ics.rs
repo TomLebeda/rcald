@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::io::BufReader;
 use std::str::FromStr;
 
-use anyhow::{bail, Context, Result};
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use anyhow::{Context, Result};
+use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
 use chrono_tz::Tz;
 use ical::parser::ical::component::IcalEvent;
 use ical::property::Property;
@@ -47,12 +47,13 @@ pub fn refresh_state(st: &mut CalendarState, agent: &ureq::Agent, tz: Tz) -> Res
     Ok(())
 }
 
-/// url with http(s) scheme is fetched, anything else is read as a local file
-/// (used by tests and for local-only setups).
+/// url with http(s) scheme is fetched, `webcal(s)://` is fetched over https,
+/// anything else is read as a local file (used by tests and for local-only
+/// setups).
 fn read_source(url: &str, agent: &ureq::Agent) -> Result<String> {
-    if url.starts_with("http://") || url.starts_with("https://") {
+    if let Some(http_url) = http_url(url) {
         let mut resp = agent
-            .get(url)
+            .get(&http_url)
             .call()
             .with_context(|| format!("GET {url}"))?;
         resp.body_mut()
@@ -61,6 +62,19 @@ fn read_source(url: &str, agent: &ureq::Agent) -> Result<String> {
     } else {
         std::fs::read_to_string(url).with_context(|| format!("read file {url}"))
     }
+}
+
+/// The URL to fetch over HTTP, or None for a local file path. `webcal://` is
+/// the de-facto scheme for calendar subscriptions and means plain https.
+fn http_url(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(url.to_string());
+    }
+    ["webcals://", "webcal://"]
+        .iter()
+        .find(|p| lower.starts_with(*p))
+        .map(|p| format!("https://{}", &url[p.len()..]))
 }
 
 /// A VEVENT plays one of three roles in a feed. Overrides and cancellations
@@ -260,7 +274,8 @@ fn parse_event(ev: &IcalEvent, tz: Tz) -> Result<Option<ParsedInput>> {
 ///   20260319              (with VALUE=DATE)
 ///   20260319T130000       (floating = local tz)
 ///   ...;TZID=Europe/Prague:20260319T130000
-///   20260319T110000Z      (UTC)
+///   20260319T110000Z      (UTC; kept in `Tz::UTC` so RRULEs recur in UTC as
+///                          RFC 5545 requires, emit shows it in local time)
 pub(crate) fn parse_datetime(
     value: &str,
     params: Option<&Vec<(String, Vec<String>)>>,
@@ -284,10 +299,7 @@ pub(crate) fn parse_datetime(
         .with_context(|| format!("invalid DATE-TIME '{value}'"))?;
 
     if is_utc {
-        return Ok((
-            Utc.from_utc_datetime(&naive).with_timezone(&local_tz),
-            false,
-        ));
+        return Ok((Tz::UTC.from_utc_datetime(&naive), false));
     }
     if let Some(tzid) = alarm::param_value(params, "TZID") {
         match Tz::from_str(tzid) {
@@ -303,7 +315,17 @@ fn resolve_local(tz: Tz, naive: NaiveDateTime) -> Result<DateTime<Tz>> {
         LocalResult::Single(dt) => Ok(dt),
         // ambiguous (DST overlap): take the earlier interpretation
         LocalResult::Ambiguous(a, _) => Ok(a),
-        LocalResult::None => bail!("local time {naive} does not exist in {tz} (DST gap)"),
+        // DST gap: RFC 5545 interprets the nonexistent time with the UTC
+        // offset in effect before the gap, i.e. shifted forward by the gap
+        // length (02:30 in a 02:00->03:00 gap becomes 03:30).
+        LocalResult::None => {
+            let before = tz
+                .from_local_datetime(&(naive - chrono::Duration::hours(3)))
+                .earliest()
+                .with_context(|| format!("local time {naive} does not exist in {tz}"))?;
+            let utc = naive - before.offset().fix();
+            Ok(tz.from_utc_datetime(&utc))
+        }
     }
 }
 
@@ -355,8 +377,28 @@ mod tests {
     fn parses_utc() {
         let (dt, all_day) = parse_datetime("20261015T110000Z", None, TZ).unwrap();
         assert!(!all_day);
-        // Prague is CEST (+02:00) in October 2026
-        assert_eq!(dt.to_rfc3339(), "2026-10-15T13:00:00+02:00");
+        assert_eq!(dt.timezone(), Tz::UTC);
+        assert_eq!(dt.to_rfc3339(), "2026-10-15T11:00:00+00:00");
+    }
+
+    #[test]
+    fn dst_gap_shifts_forward() {
+        // Prague springs forward 02:00 -> 03:00 on 2026-03-29
+        let (dt, _) = parse_datetime("20260329T023000", None, TZ).unwrap();
+        assert_eq!(dt.to_rfc3339(), "2026-03-29T03:30:00+02:00");
+    }
+
+    #[test]
+    fn webcal_maps_to_https() {
+        assert_eq!(
+            http_url("webcal://example.com/a.ics").as_deref(),
+            Some("https://example.com/a.ics")
+        );
+        assert_eq!(
+            http_url("https://example.com/a.ics").as_deref(),
+            Some("https://example.com/a.ics")
+        );
+        assert_eq!(http_url("/tmp/feed.ics"), None);
     }
 
     #[test]

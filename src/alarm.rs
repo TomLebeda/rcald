@@ -31,7 +31,9 @@ pub fn parse_duration(s: &str) -> Result<i64> {
                 if num.is_empty() {
                     bail!("invalid duration '{s}': missing number before '{c}'");
                 }
-                let n: i64 = num.parse().context("invalid duration '{s}': bad number")?;
+                let n: i64 = num
+                    .parse()
+                    .with_context(|| format!("invalid duration '{s}': bad number"))?;
                 num.clear();
                 let mult: i64 = match c {
                     'W' if !in_time => 7 * 24 * 3600,
@@ -41,7 +43,10 @@ pub fn parse_duration(s: &str) -> Result<i64> {
                     'S' if in_time => 1,
                     _ => bail!("invalid duration '{s}': '{c}' in wrong section"),
                 };
-                total += n * mult;
+                total = n
+                    .checked_mul(mult)
+                    .and_then(|v| total.checked_add(v))
+                    .with_context(|| format!("invalid duration '{s}': too large"))?;
                 units += 1;
             }
             other => bail!("invalid duration '{s}': unexpected '{other}'"),
@@ -121,6 +126,7 @@ mod tests {
         assert!(parse_duration("P15").is_err());
         assert!(parse_duration("P1Q").is_err());
         assert!(parse_duration("PT1W").is_err()); // W not allowed in time part
+        assert!(parse_duration("P99999999999999999W").is_err()); // overflow
     }
 
     #[test]

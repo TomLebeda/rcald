@@ -39,7 +39,7 @@ fn recurrence_merging() {
 
     // expand from a fixed point; the series is weekly on Wednesday
     let from = P.with_ymd_and_hms(2026, 1, 5, 10, 0, 0).unwrap();
-    let occs = recur::occurrences(s, from, 5);
+    let occs = recur::occurrences(s, from, from + Duration::days(50));
     let starts: Vec<String> = occs.iter().map(|o| o.start.to_rfc3339()).collect();
 
     // 2026-01-07 and 2026-01-14 are EXDATE'd, 2026-02-11 cancelled
@@ -76,7 +76,11 @@ fn plain_fixture_shapes() {
     assert!(folded.summary.contains("seventy five character mark"));
     assert!(folded.summary.contains("semicolon;comma,"));
     assert!(folded.summary.contains("a line break marker"));
-    assert_eq!(folded.start.to_rfc3339(), "2027-01-01T11:00:00+01:00");
+    // UTC in the feed: kept in UTC by the parser, same instant as 11:00 Prague
+    assert_eq!(
+        folded.start.with_timezone(&P).to_rfc3339(),
+        "2027-01-01T11:00:00+01:00"
+    );
 
     let floating = series
         .iter()

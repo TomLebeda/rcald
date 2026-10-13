@@ -18,7 +18,8 @@ integration, no built-in notifications; just a well-behaved CLI process.
   moved/cancelled instances (`RECURRENCE-ID`, `STATUS:CANCELLED`), alarms
   inherited from the series master unless the instance defines its own.
 - All-day and multi-day events (`VALUE=DATE`) are supported.
-- The daemon sleeps until the nearest trigger or the next fetch, then emits.
+- The daemon sleeps until the nearest trigger or the next fetch (waking at
+  least once a minute, so suspend/resume cannot delay reminders), then emits.
 - Reminders whose trigger passed while the daemon was down (but whose event
   has not ended yet) fire immediately at startup with `"late": true`.
 - State is in-memory only: restart = re-evaluate. Given the late-fire rule
@@ -60,8 +61,8 @@ fallback_all_day_offsets = ["24h", "48h"]
 
 - `fetch_period`: how often calendars are re-fetched; humantime format
   (`"30m"`, `"1h"`). Also the emission horizon in `--once` mode.
-- `url`: an `http(s)://` ICS URL (read-only secret URL works, no auth needed),
-  or a plain local file path (handy for tests).
+- `url`: an `http(s)://` or `webcal://` ICS URL (read-only secret URL works,
+  no auth needed), or a plain local file path (handy for tests).
 - `fallback_offsets`: reminder times before event start, humantime format
   (`"15m"`, `"1h30m"`, `"24h"`, `"7d"`). Applied only when the event has no
   alarms of its own.
@@ -79,8 +80,9 @@ One JSON object per line on stdout:
 ```
 
 - `start`/`end`/`trigger`: RFC 3339 with numeric offset, in the event's
-  timezone. For all-day events these are local midnights and `all_day` is
-  true; `end` is exclusive (per ical spec).
+  timezone (times the feed gives in UTC are shown in the system timezone).
+  For all-day events these are local midnights and `all_day` is true; `end`
+  is exclusive (per ical spec).
 - `lead_seconds`: `start - trigger` in seconds.
 - `late`: the trigger time already passed (daemon restart, sleep, catch-up);
   downstream may choose to ignore or down-rank these.
