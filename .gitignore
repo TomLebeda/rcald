@@ -1,0 +1,4 @@
+/target
+
+# real config contains private ICS URLs
+/rcald.toml
