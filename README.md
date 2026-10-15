@@ -24,19 +24,7 @@ rcald [-c CONFIG] [--state FILE] [-v]   # run as a daemon
 rcald --once [N]                        # fetch once, print the N nearest events (default 10), exit
 ```
 
-- Config: `$XDG_CONFIG_HOME/rcald/config.toml` by default, or `-c path`. `rcald.toml` in the repo root is git-ignored for a local config with private calendar URLs:
-
-  ```toml
-  fetch_period = "30m"             # how often calendars are re-downloaded
-  late_grace = "1h"                # missed alarms younger than this are still emitted, with "late": true
-  force_default_reminders = false  # add the offsets even to events that have their own alarms
-
-  [[calendar]]
-  name = "Personal"
-  url = "https://calendar.google.com/calendar/ical/…/basic.ics"
-  offsets = ["20m", "1h", "1d"]    # timed events: before the start
-  all_day_offsets = ["1d"]         # all-day events: before local midnight of the first day
-  ```
+- Config: `$XDG_CONFIG_HOME/rcald/config.toml` by default, or `-c path`. See [`rcald.toml.example`](rcald.toml.example); a local `rcald.toml` in the repo root is git-ignored.
 - State: `$XDG_STATE_HOME/rcald/state.json` remembers emitted alarms, so a restart never repeats them.
 - stdout carries only JSON lines; logs go to stderr.
 - Signals: `SIGHUP` reloads the config, `SIGUSR1` fetches now, `SIGTERM`/`SIGINT` exit.

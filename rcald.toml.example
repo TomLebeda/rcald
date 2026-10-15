@@ -1,0 +1,23 @@
+# rcald configuration example.
+# Copy to ~/.config/rcald/config.toml (or ./rcald.toml, git-ignored) and fill in your own calendar URLs.
+# Google Calendar: Settings > your calendar > "Secret address in iCal format". Treat these URLs like passwords.
+# Durations use humantime syntax: "90s", "20m", "1h 30m", "2d".
+
+fetch_period = "30m"            # how often calendars are re-downloaded
+late_grace = "1h"               # missed alarms younger than this are still emitted, with "late": true
+force_default_reminders = false # true = add the offsets below even to events that have their own alarms
+
+# offsets:         timed events, before the start
+# all_day_offsets: all-day events, before local midnight of the first day
+
+[[calendar]]
+name = "Personal"
+url = "https://calendar.google.com/calendar/ical/USER%40gmail.com/private-XXXXXXXXX/basic.ics"
+offsets = ["20m", "1h", "1d"]
+all_day_offsets = ["1d", "2d"]
+
+[[calendar]]
+name = "Work"
+url = "https://calendar.google.com/calendar/ical/HASH%40group.calendar.google.com/private-XXXXXXXXX/basic.ics"
+offsets = ["30m"]
+all_day_offsets = ["1d"]
