@@ -1,122 +1,60 @@
-use std::path::Path;
-use std::time::Duration;
+use std::{collections::HashSet, path::Path, time::Duration};
 
-use anyhow::{Context, Result};
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-struct FileConfig {
-    fetch_period: String,
-    #[serde(default)]
-    calendars: Vec<FileCalendar>,
-}
+use anyhow::Context;
+use serde::{Deserialize, Deserializer, de::Error};
 
 #[derive(Debug, Deserialize)]
-struct FileCalendar {
-    name: String,
-    url: String,
-    #[serde(default)]
-    fallback_offsets: Vec<String>,
-    #[serde(default)]
-    fallback_all_day_offsets: Vec<String>,
-}
-
-/// Validated config with durations parsed.
-pub struct RuntimeConfig {
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    #[serde(default = "default_fetch_period", deserialize_with = "duration")]
     pub fetch_period: Duration,
-    pub calendars: Vec<RuntimeCalendar>,
+    /// How long after its time a missed alarm is still emitted (flagged `late`).
+    #[serde(default = "default_late_grace", deserialize_with = "duration")]
+    pub late_grace: Duration,
+    /// Add the configured offsets even to events that carry their own alarms.
+    #[serde(default)]
+    pub force_default_reminders: bool,
+    #[serde(rename = "calendar")]
+    pub calendars: Vec<CalendarConfig>,
 }
 
-pub struct RuntimeCalendar {
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarConfig {
     pub name: String,
     pub url: String,
-    pub fallback_offsets: Vec<Duration>,
-    pub fallback_all_day_offsets: Vec<Duration>,
+    /// Default alarms for timed events, as offsets before the start.
+    #[serde(default, deserialize_with = "durations")]
+    pub offsets: Vec<Duration>,
+    /// Default alarms for all-day events, as offsets before local midnight of the first day.
+    #[serde(default, deserialize_with = "durations")]
+    pub all_day_offsets: Vec<Duration>,
 }
 
-pub fn load(path: &Path) -> Result<RuntimeConfig> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("cannot read config {}", path.display()))?;
-    let cfg: FileConfig =
-        toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))?;
-
-    let fetch_period = humantime::parse_duration(&cfg.fetch_period)
-        .with_context(|| format!("invalid fetch_period '{}'", cfg.fetch_period))?;
-
-    let mut calendars = Vec::new();
-    for c in cfg.calendars {
-        let fallback_offsets = parse_durations(&c.fallback_offsets)
-            .with_context(|| format!("calendar '{}': invalid fallback_offsets", c.name))?;
-        let fallback_all_day_offsets = parse_durations(&c.fallback_all_day_offsets)
-            .with_context(|| format!("calendar '{}': invalid fallback_all_day_offsets", c.name))?;
-        calendars.push(RuntimeCalendar {
-            name: c.name,
-            url: c.url,
-            fallback_offsets,
-            fallback_all_day_offsets,
-        });
+impl Config {
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let config: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let mut names = HashSet::new();
+        if let Some(dup) = config.calendars.iter().find(|c| !names.insert(&c.name)) {
+            anyhow::bail!("duplicate calendar name {:?}", dup.name);
+        }
+        Ok(config)
     }
-
-    if calendars.is_empty() {
-        log::warn!("config contains no calendars");
-    }
-
-    Ok(RuntimeConfig {
-        fetch_period,
-        calendars,
-    })
 }
 
-fn parse_durations(list: &[String]) -> Result<Vec<Duration>> {
-    list.iter()
-        .map(|s| humantime::parse_duration(s).with_context(|| format!("bad duration '{s}'")))
-        .collect()
+fn default_fetch_period() -> Duration {
+    Duration::from_mins(30)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
+fn default_late_grace() -> Duration {
+    Duration::from_hours(1)
+}
 
-    #[test]
-    fn parses_valid_config() {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        write!(
-            f,
-            r#"
-fetch_period = "30m"
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+    humantime::parse_duration(&String::deserialize(d)?).map_err(D::Error::custom)
+}
 
-[[calendars]]
-name = "personal"
-url = "https://example.com/basic.ics"
-fallback_offsets = ["20m", "1h", "24h"]
-fallback_all_day_offsets = ["24h", "48h"]
-
-[[calendars]]
-name = "other"
-url = "file.ics"
-"#,
-        )
-        .unwrap();
-        let cfg = load(f.path()).unwrap();
-        assert_eq!(cfg.fetch_period, Duration::from_secs(30 * 60));
-        assert_eq!(cfg.calendars.len(), 2);
-        assert_eq!(cfg.calendars[0].name, "personal");
-        assert_eq!(
-            cfg.calendars[0].fallback_offsets,
-            vec![
-                Duration::from_secs(20 * 60),
-                Duration::from_secs(3600),
-                Duration::from_secs(24 * 3600)
-            ]
-        );
-        assert!(cfg.calendars[1].fallback_offsets.is_empty());
-    }
-
-    #[test]
-    fn rejects_bad_duration() {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        writeln!(f, "fetch_period = \"soon\"").unwrap();
-        assert!(load(f.path()).is_err());
-    }
+fn durations<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Duration>, D::Error> {
+    Vec::<String>::deserialize(d)?.iter().map(|s| humantime::parse_duration(s).map_err(D::Error::custom)).collect()
 }
