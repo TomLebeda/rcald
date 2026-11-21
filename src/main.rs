@@ -4,6 +4,7 @@ mod daemon;
 mod ics;
 mod output;
 mod state;
+mod windows_tz;
 
 use std::{
     env,

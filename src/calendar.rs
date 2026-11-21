@@ -1,6 +1,9 @@
 //! Turns VEVENTs into concrete occurrences with their alarms.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Mutex,
+};
 
 use anyhow::Context;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone};
@@ -11,6 +14,7 @@ use tracing::warn;
 use crate::{
     config::CalendarConfig,
     ics::{self, Component, Property},
+    windows_tz,
 };
 
 /// Upper bound on occurrences of one recurring event inside the window.
@@ -223,9 +227,16 @@ fn times(prop: &Property) -> impl Iterator<Item = (DateTime<Tz>, bool)> + '_ {
     })
 }
 
+/// IANA zone for a `TZID`; Windows names (Outlook, Exchange) are translated first.
+/// An unknown zone falls back to local time and is reported once per name.
 fn timezone(tzid: &str) -> Tz {
-    tzid.parse().map(Tz::Tz).unwrap_or_else(|_| {
-        warn!("unknown TZID {tzid:?}, using local time");
+    let iana = windows_tz::to_iana(tzid).unwrap_or(tzid);
+    iana.parse().map(Tz::Tz).unwrap_or_else(|_| {
+        static REPORTED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+        let mut reported = REPORTED.lock().unwrap_or_else(|e| e.into_inner());
+        if reported.get_or_insert_default().insert(tzid.to_owned()) {
+            warn!("unknown TZID {tzid:?}, using local time");
+        }
         Tz::LOCAL
     })
 }
